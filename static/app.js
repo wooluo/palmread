@@ -277,11 +277,6 @@ async function renderScan() {
         <button class="btn ghost small" id="btn-recrop">重新裁剪</button>
       </div>
     </div>
-    <div class="card">
-      <h2>备注 <span class="sub">可选 · 仅画质说明</span></h2>
-      <input type="text" id="note" maxlength="60" placeholder="例：左手、室内灯光下拍摄（选填）">
-      <div class="hint">备注只用于说明拍摄情况。涉及算命、健康、吉凶预测等字样会被直接拦截。</div>
-    </div>
     <div class="card confirm-card">
       <label class="chk-line">
         <input type="checkbox" id="confirm-chk" ${draft.confirmed ? "checked" : ""}>
@@ -290,6 +285,11 @@ async function renderScan() {
       <div class="btn-row">
         <button class="btn primary big" id="btn-go" disabled>开始赏析 →</button>
       </div>
+    </div>
+    <div class="card">
+      <h2>备注 <span class="sub">可选 · 仅画质说明</span></h2>
+      <input type="text" id="note" maxlength="60" placeholder="例：左手、室内灯光下拍摄（选填）">
+      <div class="hint">备注只用于说明拍摄情况。涉及算命、健康、吉凶预测等字样会被直接拦截。</div>
     </div>
     ${disclaimerHtml()}
   </section>`;
