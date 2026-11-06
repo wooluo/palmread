@@ -261,8 +261,12 @@ let draft = { image: null, note: "", confirmed: false };
 
 async function renderScan() {
   await loadConfig();
+  // 离线模式（App）首用引导：Key 存在本机，未配置时前置提醒，避免 401 一脸懵
+  const pc = config && config.providers ? config.providers[config.provider] : null;
+  const needKey = MODE === "client" && pc && !pc.has_key;
   app.innerHTML = `
   <section>
+    ${needKey ? `<div class="err-box" style="margin:0 0 14px"><b>尚未配置 API Key</b>：请到 <a href="#/settings">设置</a> 粘贴智谱 Coding Plan 密钥（需开通 Coding Plan 的账号创建），保存后即可开始赏析。</div>` : ""}
     <div class="card">
       <h2>拍掌纹 <span class="sub">手心朝上 · 掌心放平</span></h2>
       <div class="guide">
