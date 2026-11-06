@@ -146,6 +146,10 @@ async function fetchModelsDirect(pcfg) {
 
 const NON_CHAT_MODEL = /embed|rerank|ocr|whisper|speech|tts|stt|audio|clip/i;
 
+// 误选纯文本模型（不接受图片输入，智谱报 1210）时的自动回退多模态模型
+const FALLBACK_VISION_MODEL = "glm-5.3-flash";
+const NO_IMAGE_SUPPORT = /1210|content\.type|取值范围|image_url|不支持图片/i;
+
 function resolveClientModel(pcfg) {
   const model = (pcfg.model || "").trim();
   if (model) return Promise.resolve(model);
@@ -173,17 +177,19 @@ function clientRequestBody(pcfg, model, note, imageDataUrl, stream) {
 }
 
 // 非流式（浏览器离线兜底；APK 有原生插件走流式）
-async function clientInterpret(pcfg, note, imageDataUrl) {
-  const model = await resolveClientModel(pcfg);
+async function clientInterpret(pcfg, model, note, imageDataUrl) {
+  if (!model) model = await resolveClientModel(pcfg);
   if (!model) throw new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。");
   const req = clientRequestBody(pcfg, model, note, imageDataUrl, false);
   const { json } = await httpJSON("POST", req.url, req.headers, req.payload, 300000);
   let text = "";
   if (json && Array.isArray(json.choices) && json.choices[0]) {
     text = (json.choices[0].message || {}).content || "";
+  } else if (json && json.error && (json.error.code || json.error.message)) {
+    throw new Error("HTTP 上游错误 " + (json.error.code || "") + "：" + (json.error.message || ""));
   }
   if (!text) throw new Error("模型未返回内容：" + JSON.stringify(json).slice(0, 160));
-  return neutralize(text);
+  return text;
 }
 
 // 输出合规兜底：命中违禁词 → 中性改写（正常情况下提示词已锁死，这层是保险；幂等可重复调用）
@@ -532,21 +538,41 @@ async function startInterp(record, cfg) {
     } else {
       const image = record.image || record.thumb;
       if (!image) throw new Error("记录中缺少掌纹图片");
-      const native = Stream.nativeStreamRequest;
-      const req = clientRequestBody(pcfg, (await resolveClientModel(pcfg)) || pcfg.model, record.note, image, true);
-      const ns = Stream.nativeStreamHttp() ? native(req.url, req.headers, req.payload, onDelta) : null;
-      if (ns) {
-        streamCancel = ns.cancel;
-        const text = await ns.promise;
-        painter.text = neutralize(text);
-        PalmHistory.saveText(record.id, painter.text, PalmPrompt.extractMeta(painter.text));
-        finish(null);
-      } else {
-        const text = await clientInterpret(pcfg, record.note, image);
-        painter.text = text;
-        PalmHistory.saveText(record.id, painter.text, PalmPrompt.extractMeta(painter.text));
-        finish(null);
+
+      // 单次尝试（原生插件流式；浏览器退回整段返回），必要时用多模态兜底模型重试
+      const runOnce = async (modelOverride) => {
+        const model = modelOverride || (await resolveClientModel(pcfg)) || pcfg.model;
+        if (!model) throw new Error("未配置模型名，且无法从服务获取模型列表。请在设置里填写模型。");
+        const req = clientRequestBody(pcfg, model, record.note, image, true);
+        const ns = Stream.nativeStreamHttp()
+          ? Stream.nativeStreamRequest(req.url, req.headers, req.payload, onDelta) : null;
+        if (ns) {
+          streamCancel = ns.cancel;
+          return { text: await ns.promise, model };
+        }
+        return { text: await clientInterpret(pcfg, model, record.note, image), model };
+      };
+
+      let out, switched = false;
+      try {
+        out = await runOnce();
+      } catch (e) {
+        const confModel = (await resolveClientModel(pcfg)) || pcfg.model;
+        if (NO_IMAGE_SUPPORT.test(e.message || "") && confModel !== FALLBACK_VISION_MODEL) {
+          switched = true;
+          Stream.toast("当前模型不支持图片输入，已自动改用 " + FALLBACK_VISION_MODEL);
+          painter.text = "";
+          painter.reset();
+          out = await runOnce(FALLBACK_VISION_MODEL);
+        } else {
+          throw e;
+        }
       }
+      painter.text = neutralize(out.text);
+      const meta = PalmPrompt.extractMeta(painter.text);
+      meta.model = out.model + (switched ? "（自动切换，原配置模型不支持图片）" : "");
+      PalmHistory.saveText(record.id, painter.text, meta);
+      finish(null);
     }
     setTimeout(() => renderResult(record.id, false), 600);
   } catch (e) {
@@ -570,6 +596,8 @@ function hintFor(msg, pid) {
   let out = "赏析失败：" + msg;
   if (/401|403|api.?key|unauthorized/i.test(msg)) {
     out += "\n提示：请到「设置」检查 API Key 是否正确保存。";
+  } else if (NO_IMAGE_SUPPORT.test(msg)) {
+    out += "\n提示：当前模型不支持图片输入（多模态请求被拒）。请到「设置」把模型改为支持图片的型号，推荐 glm-5.3-flash。";
   } else if (/429|1113|余额|资源包|quota|rate.?limit/i.test(msg)) {
     out += "\n提示：账户额度不足——Coding Plan 需用开通订阅的账号创建「Coding Plan 类型」密钥。";
   } else if (/404|model/i.test(msg)) {
@@ -676,7 +704,7 @@ async function renderSettings() {
               <input type="password" data-f="api_key" placeholder="${p.has_key ? "已保存（留空则不修改）" : "未设置"}" autocomplete="new-password">
             </div>
             <div>
-              <label class="field">模型名 <span style="font-weight:400">（多模态）</span></label>
+              <label class="field">模型名 <span style="font-weight:400">（需支持图片的多模态型号）</span></label>
               <input type="text" data-f="model" value="${Stream.esc(p.model)}" placeholder="glm-5.3-flash">
             </div>
           </div>
@@ -694,6 +722,7 @@ async function renderSettings() {
       <div class="hint">
         · 当前运行：<b>${MODE === "server" ? "服务器模式（连本机服务，流式输出）" : "离线模式（App 内直连 AI）"}</b><br>
         · <b>GLM 智谱（Coding Plan）</b>：到 open.bigmodel.cn 用<b>开通了 Coding Plan 的账号</b>创建「Coding Plan 类型」API Key 粘贴到上方；模型默认 <code>glm-5.3-flash</code>（多模态），建议保持开启「快速模式」。<br>
+        · <b>模型必须选支持图片输入的多模态型号</b>（如 <code>glm-5.3-flash</code>）。纯文本模型（如 glm-5.3）会报「content.type 参数非法 / 1210」；若误选，赏析时会自动改用 glm-5.3-flash 兜底。<br>
         · API Key 只保存在本机（App 为本机存储，服务模式在 <code>data/config.json</code>），请求直连对应服务，不经第三方。<br>
         · <b>离线限制</b>：无服务器/Apk 无网络时，仅能查看本机历史档案与浏览图片，无法进行 AI 赏析。<br>
         · 安全约束：用户备注命中敏感词会被本地拦截（不调用接口）；模型输出经提示词锁死 + 本地中性改写双重把关，绝不输出命运预测与医疗结论。

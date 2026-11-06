@@ -116,9 +116,12 @@ function saveText(id, text, meta) {
   const target = list.find((x) => x.id === id);
   if (!target || !text) return;
   target.interpretations = target.interpretations || [];
-  target.interpretations.push({ at: fmtNow(), text });
+  target.interpretations.push({ at: fmtNow(), text, model: (meta && meta.model) || "" });
   target.text = text;
-  if (meta) { target.tags = meta.tags || target.tags || []; target.summary = meta.summary || target.summary || ""; }
+  if (meta) {
+    target.tags = meta.tags || target.tags || [];
+    target.summary = meta.summary || target.summary || "";
+  }
   lsSet(list);
 }
 

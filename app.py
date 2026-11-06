@@ -126,9 +126,15 @@ def extract_meta(text):
     for n in _LINE_NAMES:
         recognized = False
         for m in re.finditer(re.escape(n), s):
-            # 只看紧跟其后的短语：「生命线识别不清，跳过解读」→ 未识别
-            after = s[m.end():m.end() + 8].lstrip("：:，,、 \n")
-            if after.startswith("识别不清") or after.startswith("跳过"):
+            # 截取「名称 → 句末/下一主线」的片段：片段内出现 识别不清/跳过 → 未识别
+            seg = s[m.end():]
+            for stop in _LINE_NAMES:
+                if stop != n:
+                    idx = seg.find(stop)
+                    if idx >= 0:
+                        seg = seg[:idx]
+            seg = re.split(r"[。；;\n]", seg, 1)[0]
+            if "识别不清" in seg or "跳过" in seg:
                 continue
             recognized = True
             break
@@ -230,6 +236,18 @@ def fetch_models(pcfg, timeout=8):
 
 
 _NON_CHAT_MODEL = re.compile(r"embed|rerank|ocr|whisper|speech|tts|stt|audio|clip", re.I)
+
+# 用户误选纯文本模型时的自动回退多模态模型（本工具必须传图，文本模型必然报 1210）
+FALLBACK_VISION_MODEL = "glm-5.3-flash"
+
+
+def _no_image_support(code, detail):
+    """上游报「不接受 image 类型内容」（如智谱 1210）→ 当前模型非多模态。"""
+    if code != 400:
+        return False
+    d = detail or ""
+    return ("1210" in d or "content.type" in d or "取值范围" in d
+            or "image_url" in d or "image" in d.lower() and "type" in d.lower())
 
 
 def resolve_model(pcfg):
@@ -552,6 +570,7 @@ class Handler(BaseHTTPRequestHandler):
                                       % pcfg.get("label", pid)}, 502)
             return
         messages = PalmPrompt.messages(record.get("note"), image)
+        model_switched = False
         try:
             resp = open_upstream(pcfg, model, messages)
         except urllib.error.HTTPError as e:
@@ -559,8 +578,27 @@ class Handler(BaseHTTPRequestHandler):
                 detail = e.read().decode("utf-8", "replace")[:400]
             except Exception:
                 detail = ""
-            self._send_json({"error": "上游返回 HTTP %d：%s" % (e.code, detail)}, 502)
-            return
+            # 误选纯文本模型 → 自动改用多模态兜底模型重试一次
+            if _no_image_support(e.code, detail) and model != FALLBACK_VISION_MODEL:
+                model_switched = True
+                model = FALLBACK_VISION_MODEL
+                try:
+                    resp = open_upstream(pcfg, model, messages)
+                except urllib.error.HTTPError as e2:
+                    try:
+                        detail = e2.read().decode("utf-8", "replace")[:400]
+                    except Exception:
+                        detail = ""
+                    self._send_json({"error": "上游返回 HTTP %d：%s（已尝试自动切换多模态模型 %s 仍失败）"
+                                              % (e2.code, detail, FALLBACK_VISION_MODEL)}, 502)
+                    return
+                except Exception as e2:
+                    self._send_json({"error": "无法连接 %s：%s（请检查网络与接口地址）"
+                                              % (pcfg.get("label", pid), e2)}, 502)
+                    return
+            else:
+                self._send_json({"error": "上游返回 HTTP %d：%s" % (e.code, detail)}, 502)
+                return
         except Exception as e:
             self._send_json({"error": "无法连接 %s：%s（请检查网络与接口地址）"
                                       % (pcfg.get("label", pid), e)}, 502)
@@ -605,7 +643,8 @@ class Handler(BaseHTTPRequestHandler):
             target = next((r for r in records if r.get("id") == rid), None)
             if target is not None:
                 target.setdefault("interpretations", []).append({
-                    "provider": pid, "label": pcfg.get("label", pid), "model": model,
+                    "provider": pid, "label": pcfg.get("label", pid),
+                    "model": model + ("（自动切换，原配置模型不支持图片）" if model_switched else ""),
                     "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "text": text,
                 })

@@ -39,6 +39,16 @@ class StubLLM(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         StubLLM.last_request = json.loads(self.rfile.read(length))
         StubLLM.call_count += 1
+        # 模拟纯文本模型拒绝图片输入（智谱 1210）
+        if StubLLM.last_request.get("model") == "stub-text-only":
+            body = json.dumps({"error": {"code": "1210",
+                              "message": "messages.content.type 参数非法，取值范围 ['text']"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -66,6 +76,9 @@ class TestAPI(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # 硬保险：无论模块导入顺序如何，绝不允许测试写到真实 data/
+        assert appmod.DATA_DIR.startswith(tempfile.gettempdir()), \
+            "测试环境数据目录异常：%s" % appmod.DATA_DIR
         cls.stub = ThreadingHTTPServer(("127.0.0.1", 0), StubLLM)
         threading.Thread(target=cls.stub.serve_forever, daemon=True).start()
         stub_port = cls.stub.server_address[1]
@@ -203,6 +216,25 @@ class TestAPI(unittest.TestCase):
     def test_23_interpret_missing_record(self):
         status, _ = self.request("POST", "/api/interpret", {"id": "no-such-id"})
         self.assertEqual(status, 404)
+
+    def test_24_fallback_when_model_not_multimodal(self):
+        # 误配纯文本模型（上游报 1210 拒绝图片）→ 服务端自动回退 glm-5.3-flash 重试
+        cfg = appmod.load_config()
+        cfg["providers"]["glm"]["model"] = "stub-text-only"
+        appmod.save_config(cfg)
+        status, body = self.request("POST", "/api/analyze",
+                                    {"image": TINY_JPEG, "note": "左手"})
+        rid = json.loads(body)["record"]["id"]
+        status, text = self.request("POST", "/api/interpret", {"id": rid})
+        self.assertEqual(status, 200)
+        self.assertIn("## 掌纹识别概览", text)
+        _, body = self.request("GET", "/api/records/" + rid)
+        interp = json.loads(body)["record"]["interpretations"][0]
+        self.assertIn("自动切换", interp["model"])
+        self.assertIn("glm-5.3-flash", interp["model"])
+        # 恢复配置，避免影响其他用例
+        cfg["providers"]["glm"]["model"] = ""
+        appmod.save_config(cfg)
 
     # ---------- 记录列表 / 删除 / 清空 ----------
     def test_30_records_list(self):

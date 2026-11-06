@@ -165,10 +165,16 @@ function extractMeta(text) {
   const tags = names.filter((n) => {
     let idx = src.indexOf(n);
     while (idx >= 0) {
-      // 只看紧跟其后的短语：「生命线识别不清，跳过解读」→ 未识别
-      const after = src.slice(idx + n.length, idx + n.length + 8)
-        .replace(/^[：:，,、\s\n]+/, "");
-      if (after.indexOf("识别不清") !== 0 && after.indexOf("跳过") !== 0) return true;
+      // 截取「名称 → 句末/下一主线」的片段：片段内出现 识别不清/跳过 → 未识别
+      let seg = src.slice(idx + n.length);
+      names.forEach((stop) => {
+        if (stop !== n) {
+          const p = seg.indexOf(stop);
+          if (p >= 0) seg = seg.slice(0, p);
+        }
+      });
+      seg = seg.split(/[。；;\n]/)[0];
+      if (seg.indexOf("识别不清") < 0 && seg.indexOf("跳过") < 0) return true;
       idx = src.indexOf(n, idx + 1);
     }
     return false;

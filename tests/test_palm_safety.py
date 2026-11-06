@@ -7,9 +7,11 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unittest
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ.setdefault("PALMREAD_DATA_DIR", tempfile.mkdtemp(prefix="palmread-safety-"))
 sys.path.insert(0, BASE_DIR)
 
 import app as appmod  # noqa: E402
