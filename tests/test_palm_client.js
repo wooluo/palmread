@@ -207,5 +207,17 @@ function loadModule(sandbox, file) {
   assert.strictEqual(fsWrites[0].data, "aGVsbG8=", "应写入剥离 dataURL 前缀的 base64");
   console.log("✓ 分享：文案模板复制 + 原生 Filesystem 保存卡片正常");
 
+  // 11) 关键回归：结果页直连必须用未脱敏配置（api_key 丢失 → 401）
+  mem.set("palmread.config", JSON.stringify({ provider: "glm", providers: { glm: {
+    label: "GLM", base: "https://open.bigmodel.cn/api/coding/paas/v4",
+    model: "glm-5.3-flash", api_key: "test-key-abc", fast: true } } }));
+  const masked = await HOOK.api("/api/config");
+  assert.strictEqual(masked.providers.glm.api_key, "", "对外展示配置应脱敏 api_key");
+  assert.strictEqual(masked.providers.glm.has_key, true, "脱敏配置保留 has_key 标记");
+  const rawCfg = HOOK.clientRawProviderConfig("glm");
+  assert.ok(rawCfg && rawCfg.api_key === "test-key-abc", "直连必须取到原始 api_key（否则 401）");
+  mem.set("palmread.config", JSON.stringify({}));
+  console.log("✓ 配置脱敏/直连分离：展示 api_key 置空，直连取原始 Key（修 401 回归）");
+
   console.log("\n全部离线模式测试通过 ✅");
 })().catch((e) => { console.error("✗ " + (e && e.message)); console.error(e); process.exit(1); });

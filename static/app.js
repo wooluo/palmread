@@ -51,6 +51,11 @@ function clientRawConfig() {
   return stored;
 }
 
+// 离线直连取原始（未脱敏）provider 配置 —— 展示用配置的 api_key 已被置空，直接用会 401
+function clientRawProviderConfig(pid) {
+  return clientRawConfig().providers[pid] || null;
+}
+
 function applyConfigPatch(cfg, body) {
   if (body.provider && cfg.providers[body.provider]) cfg.provider = body.provider;
   Object.entries(body.providers || {}).forEach(([pid, p]) => {
@@ -481,8 +486,12 @@ async function startInterp(record, cfg) {
   const startBtn = $("#start-interp");
   const stopBtn = $("#stop-interp");
   const pid = cfg.provider || "glm";
-  const pcfg = cfg.providers ? cfg.providers[pid] : null;
+  let pcfg = cfg.providers ? cfg.providers[pid] : null;
   if (!pcfg) { errBox.hidden = false; errBox.textContent = "未找到赏析服务配置，请到设置页检查。"; return; }
+  if (MODE === "client") {
+    // 关键：页面持有的配置已脱敏（api_key 置空），直连必须换回本机原始配置，否则 401
+    pcfg = clientRawProviderConfig(pid) || pcfg;
+  }
 
   interpBusy = true;
   startBtn.disabled = true;
@@ -814,7 +823,7 @@ async function renderSettings() {
 if (typeof window !== "undefined") {
   window.__palmread = {
     get mode() { return MODE; }, set mode(v) { MODE = v; },
-    detectMode, api, clientApi, neutralize
+    detectMode, api, clientApi, neutralize, clientRawProviderConfig
   };
 }
 PalmHistory.setMode("server"); // 先按服务器模式初始化，detectMode 后修正
