@@ -1,0 +1,20 @@
+{
+  "name": "palmread-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "手相观纹 安卓壳（Capacitor）",
+  "scripts": {
+    "sync": "cp -R ../static/* www/ && cp ../data/safe_words.json www/safe_words.json && npx cap sync android",
+    "build": "npm run sync && cd android && ./gradlew assembleDebug",
+    "release": "npm run sync && cd android && ./gradlew assembleRelease"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0"
+  },
+  "dependencies": {
+    "@capacitor/camera": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0"
+  }
+}

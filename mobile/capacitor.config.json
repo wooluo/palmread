@@ -1,0 +1,13 @@
+{
+  "appId": "com.wooluo.palmread",
+  "appName": "手相观纹",
+  "webDir": "www",
+  "backgroundColor": "#f6efe0",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true,
+    "adjustMarginsForEdgeToEdge": "force"
+  }
+}
